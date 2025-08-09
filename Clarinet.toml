@@ -1,22 +1,15 @@
 [project]
 name = "tic-tac-toe-game"
 description = "A betting-based Tic Tac Toe game on Stacks blockchain"
-authors = [wildanniam4@gmail.com]
+authors = ["wildanniam4@gmail.com"]
 telemetry = true
-cache_dir = "./.cache"
+cache_dir = "./.clarinet"
 
-# [contracts.tic-tac-toe]
-# path = "contracts/tic-tac-toe.clar"
-# epoch = "latest"
+[contracts.tic-tac-toe]
+path = "contracts/tic-tac-toe.clar"
+clarity_version = 2
+epoch = 2.4
 
-[repl.analysis]
-passes = ["check_checker"]
-check_checker = { trusted_sender = false, trusted_caller = false, callee_filter = false }
-
-# Check-checker settings:
-# trusted_sender: if true, inputs are trusted after tx_sender has been checked.
-# trusted_caller: if true, inputs are trusted after contract-caller has been checked.
-# callee_filter: if true, untrusted data may be passed into a private function without a
-# warning, if it gets checked inside. This check will also propagate up to the
-# caller.
-# More informations: https://www.hiro.so/blog/new-safety-checks-in-clarinet
+[repl]
+costs_version = 2
+parser_version = 2
