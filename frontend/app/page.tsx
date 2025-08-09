@@ -1,10 +1,20 @@
 import { GamesList } from "@/components/game-list";
 import { getAllGames } from "@/lib/contract";
+import { unstable_cache } from "next/cache";
 
-export const dynamic = "force-dynamic";
+// Revalidate the page (and cached data below) at most once every 30s
+export const revalidate = 30;
+
+const getAllGamesCached = unstable_cache(
+  async () => {
+    return getAllGames();
+  },
+  ["all-games"],
+  { revalidate: 30 }
+);
 
 export default async function Home() {
-  const games = await getAllGames();
+  const games = await getAllGamesCached();
 
   return (
     <section className="flex flex-col items-center py-20">

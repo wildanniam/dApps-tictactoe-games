@@ -11,8 +11,9 @@ import {
   UIntCV,
 } from "@stacks/transactions";
 
-const CONTRACT_ADDRESS = "ST3P49R8XXQWG69S66MZASYPTTGNDKK0WW32RRJDN";
+const CONTRACT_ADDRESS = "ST2HYQ0YP5YK1DF7HF859G5HDQ4JKRRFFBT48SM0M";
 const CONTRACT_NAME = "tic-tac-toe";
+
 
 type GameCV = {
   "player-one": PrincipalCV;
@@ -22,6 +23,49 @@ type GameCV = {
   board: ListCV<UIntCV>;
   winner: OptionalCV<PrincipalCV>;
 };
+
+
+// Prefer the public stacks node (less strict rate-limits than Hiro platform API)
+const CORE_API_URL = "https://stacks-node-api.testnet.stacks.co";
+
+// Small helper to delay retries
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+// Wrapper to call read-only with retry/backoff and custom core API
+async function callReadOnlyWithRetry(
+  opts: Parameters<typeof fetchCallReadOnlyFunction>[0],
+  { retries = 3, baseDelayMs = 400 }: { retries?: number; baseDelayMs?: number } = {}
+) {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await fetchCallReadOnlyFunction({
+        ...opts,
+        // Force using the public stacks node core API
+        network: { ...(STACKS_TESTNET as unknown as object), coreApiUrl: CORE_API_URL } as any,
+      });
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      const shouldRetry =
+        msg.includes("429") ||
+        msg.toLowerCase().includes("too many requests") ||
+        msg.toLowerCase().includes("rate limit");
+      if (!shouldRetry || attempt >= retries) throw e;
+      await sleep(baseDelayMs * Math.pow(2, attempt));
+      attempt += 1;
+    }
+  }
+}
+
+// Simple cache for games
+let gamesCache: Game[] | null = null;
+let lastFetchTime = 0;
+const CACHE_DURATION = 30000; // 30 seconds
+
+// Cache for individual games
+const gameCache: { [id: number]: Game | null } = {};
+const gameCacheTime: { [id: number]: number } = {};
+const GAME_CACHE_DURATION = 30000; // 30 seconds
 
 export type Game = {
   id: number;
@@ -52,44 +96,62 @@ export const EMPTY_BOARD = [
 ];
 
 export async function getAllGames() {
+  const now = Date.now();
+  if (gamesCache && now - lastFetchTime < CACHE_DURATION) {
+    return gamesCache;
+  }
+
   // Fetch the latest-game-id from the contract
-  const latestGameIdCV = (await fetchCallReadOnlyFunction({
+  const latestGameIdCV = (await callReadOnlyWithRetry({
     contractAddress: CONTRACT_ADDRESS,
     contractName: CONTRACT_NAME,
     functionName: "get-latest-game-id",
     functionArgs: [],
     senderAddress: CONTRACT_ADDRESS,
-    network: STACKS_TESTNET,
   })) as UIntCV;
 
   // Convert the uintCV to a JS/TS number type
   const latestGameId = parseInt(latestGameIdCV.value.toString());
 
-  // Loop from 0 to latestGameId-1 and fetch the game details for each game
+  // Only fetch the 3 most recent games to avoid rate limit
   const games: Game[] = [];
-  for (let i = 0; i < latestGameId; i++) {
+  const start = Math.max(0, latestGameId - 3);
+  for (let i = start; i < latestGameId; i++) {
     const game = await getGame(i);
     if (game) games.push(game);
   }
+  gamesCache = games;
+  lastFetchTime = now;
   return games;
 }
 
 export async function getGame(gameId: number) {
+  const now = Date.now();
+  if (gameCache[gameId] && now - gameCacheTime[gameId] < GAME_CACHE_DURATION) {
+    return gameCache[gameId];
+  }
   // Use the get-game read only function to fetch the game details for the given gameId
-  const gameDetails = await fetchCallReadOnlyFunction({
+  const gameDetails = await callReadOnlyWithRetry({
     contractAddress: CONTRACT_ADDRESS,
     contractName: CONTRACT_NAME,
     functionName: "get-game",
     functionArgs: [uintCV(gameId)],
     senderAddress: CONTRACT_ADDRESS,
-    network: STACKS_TESTNET,
   });
 
   const responseCV = gameDetails as OptionalCV<TupleCV<GameCV>>;
   // If we get back a none, then the game does not exist and we return null
-  if (responseCV.type === "none") return null;
+  if (responseCV.type === "none") {
+    gameCache[gameId] = null;
+    gameCacheTime[gameId] = now;
+    return null;
+  }
   // If we get back a value that is not a tuple, something went wrong and we return null
-  if (responseCV.value.type !== "tuple") return null;
+  if (responseCV.value.type !== "tuple") {
+    gameCache[gameId] = null;
+    gameCacheTime[gameId] = now;
+    return null;
+  }
 
   // If we got back a GameCV tuple, we can convert it to a Game object
   const gameCV = responseCV.value.value;
@@ -107,6 +169,8 @@ export async function getGame(gameId: number) {
     winner:
       gameCV["winner"].type === "some" ? gameCV["winner"].value.value : null,
   };
+  gameCache[gameId] = game;
+  gameCacheTime[gameId] = now;
   return game;
 }
 
